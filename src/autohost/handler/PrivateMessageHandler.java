@@ -3,6 +3,8 @@ package autohost.handler;
 import autohost.IRCBot;
 import autohost.Lobby;
 import autohost.irc.IRCClient;
+import autohost.lobby.BeatmapParameter;
+import autohost.lobby.BeatmapSetting;
 import autohost.util.RegexUtils;
 
 import java.util.Iterator;
@@ -86,9 +88,10 @@ public class PrivateMessageHandler {
 				password = "Password: Enabled";
 			}
 
+			BeatmapSetting diff = lobby.getBeatmapSetting(BeatmapParameter.STAR_DIFFICULTY);
 			m_client.sendMessage(sender,
 					"Lobby [" + i + "] || Name: " + lobby.name
-							+ " || Stars: " + lobby.minDifficulty + "* - " + lobby.maxDifficulty
+							+ " || Stars: " + diff.getMin() + "* - " + diff.getMax()
 							+ "* || Slots: [" + lobby.slots.size() + "/16] || "
 							+ password);
 		}
@@ -135,7 +138,8 @@ public class PrivateMessageHandler {
 			if (lobby.creatorName != null || lobby.creatorName.equals("")) {
 				if (lobby.creatorName.equalsIgnoreCase(sender)) {
 					iter.remove();
-					m_bot.createNewLobby(lobby.name, lobby.minDifficulty, lobby.maxDifficulty, lobby.creatorName,
+					BeatmapSetting diff = lobby.getBeatmapSetting(BeatmapParameter.STAR_DIFFICULTY);
+					m_bot.createNewLobby(lobby.name, (double)diff.getMin(), (double)diff.getMax(), lobby.creatorName,
 							lobby.OPLobby);
 					m_client.sendMessage(sender, "Lobby is being created. Please wait...");
 					return;
@@ -147,8 +151,9 @@ public class PrivateMessageHandler {
 		for (Lobby lobby : deadLobbies) {
 			if (lobby.creatorName.equalsIgnoreCase(sender)) {
 				deadLobbies.remove(lobby);
-				m_bot.createNewLobby(lobby.name, lobby.minDifficulty, lobby.maxDifficulty,
-						lobby.creatorName, lobby.OPLobby);
+				BeatmapSetting diff = lobby.getBeatmapSetting(BeatmapParameter.STAR_DIFFICULTY);
+				m_bot.createNewLobby(lobby.name, (double)diff.getMin(), (double)diff.getMax(), lobby.creatorName,
+						lobby.OPLobby);
 				return;
 			}
 		}

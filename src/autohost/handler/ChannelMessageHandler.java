@@ -4,10 +4,9 @@ import autohost.AutoHost;
 import autohost.IRCBot;
 import autohost.Lobby;
 import autohost.irc.IRCClient;
-import autohost.util.Beatmap;
-import autohost.util.JSONUtils;
-import autohost.util.RegexUtils;
-import autohost.util.Slot;
+import autohost.lobby.BeatmapParameter;
+import autohost.lobby.BeatmapSetting;
+import autohost.util.*;
 import lt.ekgame.beatmap_analyzer.difficulty.Difficulty;
 import lt.ekgame.beatmap_analyzer.parser.BeatmapException;
 import lt.ekgame.beatmap_analyzer.parser.BeatmapParser;
@@ -26,10 +25,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.text.DecimalFormat;
 import java.util.Map;
 import java.util.regex.Matcher;
 
 import static autohost.util.MathUtils.round;
+import static autohost.util.TimeUtils.MINUTE;
 
 public class ChannelMessageHandler {
 	private final IRCBot    m_bot;
@@ -387,24 +388,6 @@ public class ChannelMessageHandler {
 		case "password":
 			handlePassword(lobby, sender, message);
 			break;
-		case "mindiff":
-			handleMinDifficulty(lobby, sender, message);
-			break;
-		case "maxar":
-			handleMaxAR(lobby, sender, message);
-			break;
-		case "maxyear":
-			handleMaxYear(lobby, sender, message);
-			break;
-		case "minyear":
-			handleMinYear(lobby, sender, message);
-			break;
-		case "limityear":
-			handleLimitYear(lobby, sender);
-			break;
-		case "duration":
-			handleDuration(lobby, sender, message);
-			break;
 		case "hostme":
 			handleHostMe(lobby, sender);
 			break;
@@ -425,6 +408,9 @@ public class ChannelMessageHandler {
 			break;
 		case "songsearch":
 			handleSongSearch(lobby, sender, message);
+			break;
+		case "set":
+			handleSet(lobby, sender, message);
 			break;
 		default:
 			// Unknown command.
@@ -483,40 +469,16 @@ public class ChannelMessageHandler {
 							sender + " That beatmap does not fit the lobby's current gamemode!");
 					return;
 				}
-				Beatmap beatmap = JSONUtils.silentGetBeatmap(obj);
+				Beatmap beatmap = JSONUtils.silentGetBeatmapFromApi(obj);
 				beatmap.RequestedBy = m_bot.getId(sender);
-				if (lobby.onlyDifficulty) { // Does the lobby have
-					// locked difficulty limits?
-					if (!(beatmap.difficulty >= lobby.minDifficulty
-							&& beatmap.difficulty <= lobby.maxDifficulty)) { // Are
-						// we
-						// inside
-						// the
-						// criteria?
-						// if
-						// not,
-						// return
-						m_client.sendMessage(lobby.channel,
-								sender + " the difficulty of the song you requested does not match the lobby criteria. "
-										+ "(Lobby m/M: " + lobby.minDifficulty + "*/" + lobby.maxDifficulty
-										+ "*)," + " Song: " + beatmap.difficulty + "*");
-						return;
-					}
+				if (!lobby.isBeatmapValid(beatmap)) {
+					// TODO: Output a useful error?
+					return;
 				}
 				if (!lobby.statusTypes.get(beatmap.graveyard)) {
 					m_client.sendMessage(lobby.channel, sender
 							+ " That beatmap is not within ranking criteria for this lobby! (Ranked/loved/etc)");
 					return;
-				}
-
-				if (lobby.maxAR != 0) {
-					if (beatmap.difficulty_ar > lobby.maxAR) {
-
-						m_client.sendMessage(lobby.channel,
-								sender + " That beatmap has a too high Approach Rate for this lobby! Max: "
-										+ lobby.maxAR + " beatmap AR: " + beatmap.difficulty_ar);
-						return;
-					}
 				}
 
 				if (lobby.onlyGenre) {
@@ -526,39 +488,7 @@ public class ChannelMessageHandler {
 						return;
 					}
 				}
-				if (lobby.limitDate) {
-					Matcher dateM = RegexUtils.matcher(
-							"(\\d+)\\-(\\d+)\\-(\\d+)(.+)",
-							beatmap.date);
-					if (dateM.matches()) {
-						if (Integer.valueOf(dateM.group(1)) >= lobby.maxyear
-								|| Integer.valueOf(dateM.group(1)) <= lobby.minyear) {
-							m_client.sendMessage(lobby.channel,
-									sender + " This beatmap is too old or new for this beatmap! Range: "
-											+ lobby.minyear + "-" + lobby.maxyear);
-							return;
-						}
-					}
-				}
-				if (beatmap.total_length >= lobby.maxLength) {
-					String length = "";
-					int minutes = lobby.maxLength / 60;
-					int seconds = lobby.maxLength - (minutes * 60);
-					length = minutes + ":" + seconds;
-					m_client.sendMessage(lobby.channel, sender + " This beatmap too long! Max length is: " + length);
-					return;
-				}
-					/*
-					 * if (mapR.group(2) != null) { String modString =
-					 * mapR.group(2); String[] mods = modString.split(" ");
-					 * for (String arg : mods) { if
-					 * (arg.equalsIgnoreCase("DT")) beatmap.DT = true; else
-					 * if (arg.equalsIgnoreCase("NC")) beatmap.NC = true;
-					 * else if (arg.equalsIgnoreCase("HT")) beatmap.HT =
-					 * true; } }
-					 */
 				m_bot.addBeatmap(lobby, beatmap);
-
 			});
 		} catch (Exception e) {
 			e.printStackTrace();
@@ -602,7 +532,7 @@ public class ChannelMessageHandler {
 							sender + " That beatmap does not fit the lobby's current gamemode!");
 					return;
 				}
-				Beatmap beatmap = JSONUtils.silentGetBeatmap(obj);
+				Beatmap beatmap = JSONUtils.silentGetBeatmapFromApi(obj);
 				beatmap.RequestedBy = m_bot.getId(sender);
 				beatmap.DT = true;
 				try {
@@ -632,38 +562,9 @@ public class ChannelMessageHandler {
 					m_client.sendMessage(lobby.channel, "Error Parsing beatmap. Please try again.");
 				}
 
-				if (lobby.onlyDifficulty) { // Does the lobby have
-					// locked difficulty limits?
-					if (!(beatmap.difficulty >= lobby.minDifficulty
-							&& beatmap.difficulty <= lobby.maxDifficulty)) { // Are
-						// we inside the criteria? if not, return
-						m_client.sendMessage(lobby.channel,
-								sender + " the difficulty of the song you requested does not match the lobby criteria. "
-										+ "(Lobby m/M: " + lobby.minDifficulty + "*/" + lobby.maxDifficulty
-										+ "*)," + " Song: " + beatmap.difficulty + "*");
-						return;
-					}
-				}
-				if (lobby.limitDate) {
-					Matcher dateM = RegexUtils.matcher(
-							"(\\d+)\\-(\\d+)\\-(\\d+)(.+)",
-							beatmap.date);
-					if (dateM.matches()) {
-						if (Integer.valueOf(dateM.group(1)) >= lobby.maxyear
-								|| Integer.valueOf(dateM.group(1)) <= lobby.minyear) {
-							m_client.sendMessage(lobby.channel,
-									sender + " This beatmap is too old or new for this beatmap! Range: "
-											+ lobby.minyear + "-" + lobby.maxyear);
-							return;
-						}
-					}
-				}
-				if ((beatmap.total_length / 1.5) >= lobby.maxLength) {
-					String length = "";
-					int minutes = lobby.maxLength / 60;
-					int seconds = lobby.maxLength - (minutes * 60);
-					length = minutes + ":" + seconds;
-					m_client.sendMessage(lobby.channel, sender + " This beatmap too long! Max length is: " + length);
+				if (!lobby.isBeatmapValid(beatmap)) {
+					// TODO: The total_length check here was checking beatmap.total_length / 1.5) >= lobby.maxLength
+					// I don't know what that / 1.5 was there tho...
 					return;
 				}
 
@@ -671,16 +572,6 @@ public class ChannelMessageHandler {
 					m_client.sendMessage(lobby.channel, sender
 							+ " That beatmap is not within ranking criteria for this lobby! (Ranked/loved/etc)");
 					return;
-				}
-
-				if (lobby.maxAR != 0) {
-					if (beatmap.difficulty_ar > lobby.maxAR) {
-
-						m_client.sendMessage(lobby.channel,
-								sender + " That beatmap has a too high Approach Rate for this lobby! Max: "
-										+ lobby.maxAR + " beatmap AR: " + beatmap.difficulty_ar);
-						return;
-					}
 				}
 
 				if (lobby.onlyGenre) {
@@ -809,9 +700,8 @@ public class ChannelMessageHandler {
 				"maxdiff (\\d+(?:\\.\\d+)?)",
 				message);
 		if (diffM.matches()) {
-			lobby.maxDifficulty = Double.valueOf(diffM.group(1));
-			m_client.sendMessage(lobby.channel,
-					"Max difficulty now is " + diffM.group(1));
+			lobby.setParameterMax(BeatmapParameter.STAR_DIFFICULTY, Double.valueOf(diffM.group(1)));
+			m_client.sendMessage(lobby.channel, "Max difficulty now is " + diffM.group(1));
 		}
 	}
 
@@ -989,116 +879,6 @@ public class ChannelMessageHandler {
 		}
 	}
 
-	private void handleMinDifficulty(Lobby lobby, String sender, String message) {
-		if (!lobby.isOP(m_bot.getId(sender))) return;
-
-		Matcher diffM = RegexUtils.matcher("mindiff (.+)", message);
-		if (diffM.matches()) {
-			lobby.minDifficulty = Double.valueOf(diffM.group(1));
-			m_client.sendMessage(lobby.channel,
-					"New minimum difficulty is " + diffM.group(1));
-		}
-	}
-
-	private void handleMaxAR(Lobby lobby, String sender, String message) {
-		if (!lobby.isOP(m_bot.getId(sender))) return;
-
-		Matcher diffM = RegexUtils.matcher(
-				"maxar (.+)",
-				message);
-		if (diffM.matches()) {
-			lobby.maxAR = Double.valueOf(diffM.group(1));
-			if (lobby.maxAR == 0.0)
-				m_client.sendMessage(lobby.channel, "Approach Rate limit was removed.");
-			else
-				m_client.sendMessage(lobby.channel,
-						"New maximum approach rate is " + diffM.group(1));
-		} else {
-			lobby.maxAR = 0.0;
-			m_client.sendMessage(lobby.channel, "Approach Rate limit was removed.");
-		}
-	}
-
-	private void handleMaxYear(Lobby lobby, String sender, String message) {
-		if (!lobby.isOP(m_bot.getId(sender))) return;
-
-		Matcher yrM = RegexUtils.matcher(
-				"maxyear (.+)",
-				message);
-		if (yrM.matches()) {
-			if (Integer.valueOf(yrM.group(1)) < lobby.minyear) {
-				m_client.sendMessage(lobby.channel,
-						"Max year cant be smaller than min year. "
-								+ "Please lower that first ;)");
-				return;
-			}
-			lobby.maxyear = Integer.valueOf(yrM.group(1));
-			m_client.sendMessage(lobby.channel,
-					"New newer year limit now is " + yrM.group(1));
-			if (lobby.limitDate) {
-
-			} else {
-				lobby.limitDate = true;
-				m_client.sendMessage(lobby.channel, "Year Limiter was enabled. For toggling it, do !limityear");
-			}
-		} else {
-			lobby.maxyear = 2200;
-			m_client.sendMessage(lobby.channel, "Newest year limit was removed.");
-		}
-	}
-
-	private void handleMinYear(Lobby lobby, String sender, String message) {
-		if (!lobby.isOP(m_bot.getId(sender))) return;
-
-		Matcher yrM = RegexUtils.matcher(
-				"minyear (.+)",
-				message);
-		if (yrM.matches()) {
-			if (Integer.valueOf(yrM.group(1)) > lobby.maxyear) {
-				m_client.sendMessage(lobby.channel,
-						"Min year cant be bigger than max year. "
-								+ "Please increase that first ;)");
-				return;
-			}
-			lobby.minyear = Integer.valueOf(yrM.group(1));
-			m_client.sendMessage(lobby.channel,
-					"Oldest year limit now is " + yrM.group(1));
-			if (lobby.limitDate) {
-
-			} else {
-				lobby.limitDate = true;
-				m_client.sendMessage(lobby.channel, "Year Limiter was enabled. For toggling it, do !limityear");
-			}
-		} else {
-			lobby.minyear = 0;
-			m_client.sendMessage(lobby.channel, "Oldest year limit was removed");
-		}
-	}
-
-	private void handleLimitYear(Lobby lobby, String sender) {
-		if (!lobby.isOP(m_bot.getId(sender))) return;
-
-		lobby.limitDate = !lobby.limitDate;
-		m_client.sendMessage(lobby.channel,
-				"Toggled Date limiting. State: " + lobby.limitDate);
-	}
-
-	private void handleDuration(Lobby lobby, String sender, String message) {
-		if (!lobby.isOP(m_bot.getId(sender))) return;
-
-		Matcher yrM = RegexUtils.matcher(
-				"duration (.+)",
-				message);
-		if (yrM.matches()) {
-			lobby.maxLength = Integer.valueOf(yrM.group(1));
-			String length = "";
-			int minutes = lobby.maxLength / 60;
-			int seconds = lobby.maxLength - (minutes * 60);
-			length = minutes + ":" + seconds;
-			m_client.sendMessage(lobby.channel, "Maximum duration now is " + length);
-		}
-	}
-
 	private void handleHostMe(Lobby lobby, String sender) {
 		int id = m_bot.getId(sender);
 		if (!lobby.isOP(id)) return;
@@ -1186,5 +966,104 @@ public class ChannelMessageHandler {
 			} else {
 				m_bot.searchBeatmap(mapname, lobby, sender, author);
 			}
+	}
+
+	private void handleSet(Lobby lobby, String sender, String message) {
+		if (!lobby.isOP(m_bot.getId(sender))) {
+			m_client.sendMessage(lobby.channel, sender + ", you're not an Operator!");
+			return;
+		}
+
+		Matcher command = RegexUtils.matcher(
+				"set (?<mode>.*) (?<param>.*) (?<value>.*)",
+				message);
+		if (!command.matches()) {
+			// TODO: Print usage?
+			return;
+		}
+
+		String mode = command.group("mode");
+		String param = command.group("param");
+		String valueString = command.group("value");
+		boolean clearValue = valueString.equalsIgnoreCase("clear");
+
+		BeatmapSetting setting = lobby.getBeatmapSetting(param);
+		if (setting == null) {
+			// TODO: Print usage?
+			return;
+		}
+
+		Object value = null;
+		if (!clearValue) {
+			try {
+				if (setting.getType().equals(Double.class)) {
+					value = Double.parseDouble(valueString);
+				} else if (setting.getType().equals(Integer.class)) {
+					value = Integer.parseInt(valueString);
+				} else {
+					// TODO: Print sever error. This should never happen.
+					return;
+				}
+			} catch (NumberFormatException e) {
+				// TODO: Print usage?
+				return;
+			}
+		}
+
+		boolean setMin = false;
+		boolean setMax = false;
+		if (mode.equalsIgnoreCase("min")) {
+			setMin = true;
+		} else if (mode.equalsIgnoreCase("max")) {
+			setMax = true;
+		} else if (mode.equalsIgnoreCase("both")) {
+			setMin = true;
+			setMax = true;
+		} else {
+			// TODO: Print usage?
+			return;
+		}
+
+		StringBuilder sb = new StringBuilder();
+		if (setMin && setMax) {
+			sb.append(setting.getLongName());
+		} else if (setMin) {
+			sb.append("Max ").append(setting.getLongName().toLowerCase());
+		} else {
+			sb.append("Min ").append(setting.getLongName().toLowerCase());
+		}
+		sb.append(" ");
+
+		if (clearValue) {
+			if (setMin) {
+				setting.clearMin();
+			}
+			if (setMax) {
+				setting.clearMax();
+			}
+			sb.append("is no longer restricted.");
+		} else {
+			if (setMin) {
+				setting.setMin(value);
+			}
+			if (setMax) {
+				setting.setMax(value);
+			}
+			sb.append("is now restricted to ");
+			if (param.equalsIgnoreCase(BeatmapParameter.LENGTH.getName())) {
+				int maxLength = (Integer) value;
+				int minutes = maxLength / (int)MINUTE;
+				int seconds = maxLength % (int)MINUTE;
+				sb.append(minutes)
+						.append(":")
+						.append(seconds);
+			} else if (param.equalsIgnoreCase(BeatmapParameter.LAST_UPDATED.getName())) {
+				sb.append(value);
+			} else {
+				DecimalFormat df = new DecimalFormat("#0.00");
+				sb.append(df.format(value));
+			}
+			sb.append(".");
+		}
 	}
 }

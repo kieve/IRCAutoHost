@@ -3,6 +3,8 @@ package autohost;
 import autohost.handler.ChannelMessageHandler;
 import autohost.handler.PrivateMessageHandler;
 import autohost.irc.IRCClient;
+import autohost.lobby.BeatmapParameter;
+import autohost.lobby.BeatmapSetting;
 import autohost.util.*;
 import autohost.util.TimerThread;
 import lt.ekgame.beatmap_analyzer.difficulty.Difficulty;
@@ -232,15 +234,14 @@ public class IRCBot {
 		}
 	}
 
-	public void createNewLobby(String name, double mindiff, double maxdiff, String creator, Boolean isOP) {
+	public void createNewLobby(String name, double minDiff, double maxDiff, String creator, Boolean isOP) {
 		Lobby lobby = new Lobby();
 		lobby.slots.clear();
 		lobby.LobbySize = 16;
 		lobby.type = "0";
 		lobby.status = 1;
 		lobby.name = name;
-		lobby.maxDifficulty = maxdiff;
-		lobby.minDifficulty = mindiff;
+		lobby.setParameter(BeatmapParameter.STAR_DIFFICULTY, minDiff, maxDiff);
 		lobby.OPLobby = isOP;
 		lobby.creatorName = creator;
 		LobbyCreation.add(lobby);
@@ -266,8 +267,7 @@ public class IRCBot {
 		lobby.LobbySize = 16;
 		lobby.type = "0";
 		lobby.status = 1;
-		lobby.maxDifficulty = (double) 5;
-		lobby.minDifficulty = (double) 4;
+		lobby.setParameter(BeatmapParameter.STAR_DIFFICULTY, 4.0d, 5.0d);
 		lobby.OPLobby = isOP;
 		lobby.creatorName = creator;
 		lobby.rejoined = true;
@@ -316,8 +316,7 @@ public class IRCBot {
 			lobby.LobbySize = 16;
 			lobby.type = "0";
 			lobby.status = 1;
-			lobby.maxDifficulty = (double) 5;
-			lobby.minDifficulty = (double) 4;
+			lobby.setParameter(BeatmapParameter.STAR_DIFFICULTY, 4.0d, 5.0d);
 			lobby.timer = new TimerThread(this, lobby);
 			lobby.timer.start();
 		}
@@ -382,17 +381,12 @@ public class IRCBot {
 						m_client.sendMessage(lobby.channel, Sender + " That beatmap does not fit the lobby's current gamemode!");
 						return;
 					}
-					Beatmap beatmap = JSONUtils.silentGetBeatmap(obj);
+					Beatmap beatmap = JSONUtils.silentGetBeatmapFromApi(obj);
 					beatmap.RequestedBy = getId(Sender);
-					if (lobby.onlyDifficulty) { // Does the lobby have
-												// locked difficulty limits?
-						if (!(beatmap.difficulty >= lobby.minDifficulty && beatmap.difficulty <= lobby.maxDifficulty)) {
-							// m_client.sendMessage(lobby.channel, Sender+ " Difficulty
-							// [https://osu.ppy.sh/b/"+beatmap.beatmap_id+"
-							// "+beatmap.difficulty_name+"] doesnt match the
-							// lobby difficulty.");
-							block = true;
-						}
+
+					if (!lobby.isBeatmapValid(beatmap)) {
+						// TODO: Output the list of errors in some nice way.
+						block = true;
 					}
 
 					if (!lobby.statusTypes.get(beatmap.graveyard)) {
@@ -402,21 +396,6 @@ public class IRCBot {
 							// (Ranked/loved/etc)");
 							block = true;
 						}
-					}
-
-					if (lobby.maxAR != 0 && beatmap.difficulty_ar < lobby.maxAR) {
-						m_client.sendMessage(lobby.channel,
-								Sender + " That beatmap has a too high Approach Rate for this lobby!");
-						return;
-					}
-
-					if ((beatmap.total_length) >= lobby.maxLength) {
-						String length = "";
-						int minutes = lobby.maxLength / 60;
-						int seconds = lobby.maxLength - (minutes * 60);
-						length = minutes + ":" + seconds;
-						m_client.sendMessage(lobby.channel, Sender + " This beatmap too long! Max length is: " + length);
-						return;
 					}
 
 					if (!lobby.statusTypes.get(beatmap.graveyard)) {
@@ -780,7 +759,7 @@ public class IRCBot {
 					m_client.sendMessage(lobby.channel, "ERORR: The random beatmap did not fit this lobby's gamemode!");
 					return;
 				}
-				Beatmap beatmap = JSONUtils.silentGetBeatmap(obj, true);
+				Beatmap beatmap = JSONUtils.silentGetBeatmapFromSearch(obj);
 				beatmapFile bm = getPeppyPoints(beatmap.beatmap_id, lobby);
 				if (bm == null) {
 					if (!lobby.type.equals("2")) {
@@ -792,37 +771,14 @@ public class IRCBot {
 						return;
 					}
 				}
-				if (lobby.onlyDifficulty) { // Does the lobby have
-											// locked difficulty limits?
-					if (!(beatmap.difficulty >= lobby.minDifficulty && beatmap.difficulty <= lobby.maxDifficulty)) { // Are
-																														// we
-																														// inside
-																														// the
-																														// criteria?
-																														// if
-																														// not,
-																														// return
-						m_client.sendMessage(lobby.channel,
-								"ERROR: The difficulty of the random beatmap found does not match the lobby criteria."
-										+ "(Lobby m/M: " + lobby.minDifficulty + "*/" + lobby.maxDifficulty + "*),"
-										+ " Song: " + beatmap.difficulty + "*");
-						return;
-					}
+				if (!lobby.isBeatmapValid(beatmap)) {
+					// TODO: Error message of what's wrong? It's selecting a random beatmap so much might so wrong.
+					return;
 				}
 				if (!lobby.statusTypes.get(beatmap.graveyard)) {
 					m_client.sendMessage(lobby.channel,
 							"ERROR: The random beatmap is not within ranking criteria for this lobby! (Ranked/loved/etc)");
 					return;
-				}
-
-				if (lobby.maxAR != 0) {
-					if (beatmap.difficulty_ar > lobby.maxAR) {
-
-						m_client.sendMessage(lobby.channel,
-								"ERROR: The random beatmap has a too high Approach Rate for this lobby! Max: "
-										+ lobby.maxAR + " beatmap AR: " + beatmap.difficulty_ar);
-						return;
-					}
 				}
 
 				if (lobby.onlyGenre) {
@@ -870,19 +826,27 @@ public class IRCBot {
 		} else if (lobby.type.equals("3")) {
 			mode = "Mania";
 		}
-		if (lobby.maxAR > 0.0) {
-			maxAR = "" + lobby.maxAR;
+
+		BeatmapSetting ar = lobby.getBeatmapSetting(BeatmapParameter.APPROACH_RATE);
+		if (ar.hasMax()) {
+			maxAR = ar.getMax().toString();
 		}
+
 		String date_start = "2000-1-1";
 		String date_end = "2020-1-1";
-		if (lobby.limitDate) {
-			date_start = lobby.minyear + "-1-1";
-			date_end = lobby.maxyear + "-1-1";
+		BeatmapSetting date = lobby.getBeatmapSetting(BeatmapParameter.LAST_UPDATED);
+		if (date.hasMin()) {
+			date_start = date.getMin().toString() + "-1-1";
 		}
+		if (date.hasMax()) {
+			date_end = date.getMax().toString() + "-1-1";
+		}
+
+		BeatmapSetting diff = lobby.getBeatmapSetting(BeatmapParameter.STAR_DIFFICULTY);
 		URI uri = new URIBuilder().setScheme("http").setHost("osusearch.com").setPath("/random/")
 				.setParameter("statuses", status).setParameter("modes", mode).setParameter("order", "-difficulty")
 				.setParameter("max_length", "300")
-				.setParameter("star", "( " + lobby.minDifficulty + "," + lobby.maxDifficulty + ")")
+				.setParameter("star", "( " + diff.getMin() + "," + diff.getMax() + ")")
 				.setParameter("date_start", date_start).setParameter("date_end", date_end)
 				.setParameter("ammount", "5")
 				.setParameter("ar", "( 0," + maxAR + ")").build();
@@ -930,16 +894,19 @@ public class IRCBot {
 			} else if (lobby.type.equals("3")) {
 				mode = "Mania";
 			}
-			if (lobby.maxAR > 0.0) {
-				maxAR = "" + lobby.maxAR;
+			BeatmapSetting ar = lobby.getBeatmapSetting(BeatmapParameter.APPROACH_RATE);
+			if (ar.hasMax()) {
+				maxAR = ar.getMax().toString();
 			}
 			String date_start = "2000-1-1";
 			String date_end = "2020-1-1";
+			BeatmapSetting diff = lobby.getBeatmapSetting(BeatmapParameter.STAR_DIFFICULTY);
+			BeatmapSetting length = lobby.getBeatmapSetting(BeatmapParameter.LENGTH);
 			URIBuilder uriBuilder = new URIBuilder().setScheme("http").setHost("osusearch.com").setPath("/query/")
 						.setParameter("statuses", status).setParameter("modes", mode)
-						.setParameter("order", "-difficulty").setParameter("max_length", "" + lobby.maxLength)
+						.setParameter("order", "-difficulty").setParameter("max_length", "" + length.getMin().toString())
 						.setParameter("title", name)
-						.setParameter("star", "( " + lobby.minDifficulty + "," + lobby.maxDifficulty + ")")
+						.setParameter("star", "( " + diff.getMin() + "," + diff.getMin() + ")")
 						.setParameter("date_start", date_start)
 						.setParameter("date_end", date_end)
 						.setParameter("ar", "( 0," + maxAR + ")");
@@ -967,7 +934,7 @@ public class IRCBot {
 					for (int i = 0; i < Info.length(); i++) {
 						String str = "" + Info.get(i);
 						JSONObject beatmap = new JSONObject(str);
-						Beatmap beatmapObj = new Beatmap(beatmap, true);
+						Beatmap beatmapObj = Beatmap.createFromSearch(beatmap);
 						int id = beatmap.getInt("beatmap_id");
 						String artist = beatmap.getString("artist");
 						String title = beatmap.getString("title");
@@ -1010,7 +977,7 @@ public class IRCBot {
 				String str = "" + Info.get(0);
 				JSONObject beatmap = new JSONObject(str);
 				System.out.println(str);
-				Beatmap beatmapObj = new Beatmap(beatmap, true);
+				Beatmap beatmapObj = Beatmap.createFromSearch(beatmap);
 				addBeatmap(lobby, beatmapObj);
 			}
 		} catch (JSONException | URISyntaxException | IOException e) {

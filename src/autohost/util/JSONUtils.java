@@ -23,17 +23,17 @@ public abstract class JSONUtils {
 		}
 	}
 
-	public static Beatmap silentGetBeatmap(JSONObject object) {
+	public static Beatmap silentGetBeatmapFromApi(JSONObject obj) {
 		try {
-			return new Beatmap(object);
+			return Beatmap.createFromApi(obj);
 		} catch (Exception e) {
 			return new Beatmap();
 		}
 	}
 
-	public static Beatmap silentGetBeatmap(JSONObject object, boolean b) {
+	public static Beatmap silentGetBeatmapFromSearch(JSONObject obj) {
 		try {
-			return new Beatmap(object, b);
+			return Beatmap.createFromSearch(obj);
 		} catch (Exception e) {
 			return new Beatmap();
 		}
